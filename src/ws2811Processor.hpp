@@ -21,7 +21,7 @@ extern "C" {
 #endif
 
 #ifndef SIDESET_PIN
-  #define SIDESET_PIN 29
+  #define SIDESET_PIN 22
 #endif
 
 enum WS2811ColorMapping {
@@ -74,21 +74,21 @@ private:
   WS2811ColorMapping color_mapping;
   bool statusLEDActive;
 
-  inline void init_receiverGPIO() {
-    pio_sm_set_consecutive_pindirs(pio1, sm_receiver, DATA_IN_PIN2, 1, GPIO_IN);
-    pinMode(DATA_IN_PIN2, INPUT_PULLDOWN);
-    pio_gpio_init(pio1, DATA_IN_PIN2);
-    pio_sm_set_consecutive_pindirs(pio1, sm_receiver, SIDESET_PIN, 1, GPIO_OUT);
-    pio_gpio_init(pio1, SIDESET_PIN);
+  inline void init_receiverGPIO(uint8_t dataInPin, uint8_t sidesetPin) {
+    pio_sm_set_consecutive_pindirs(pio1, sm_receiver, dataInPin, 1, GPIO_IN);
+    pinMode(dataInPin, INPUT_PULLDOWN);
+    pio_gpio_init(pio1, dataInPin);
+    pio_sm_set_consecutive_pindirs(pio1, sm_receiver, sidesetPin, 1, GPIO_OUT);
+    pio_gpio_init(pio1, sidesetPin);
   }
 
-  inline void initSMConfig() {
+  inline void initSMConfig(uint8_t dataInPin, uint8_t sidesetPin, uint8_t dataOutPin) {
     sm_conf = ws2811Receiver_program_get_default_config(offset_receiver);
 
-    sm_config_set_in_pins(&sm_conf, DATA_IN_PIN);
+    sm_config_set_in_pins(&sm_conf, dataInPin);
     
-    sm_config_set_jmp_pin(&sm_conf, DATA_IN_PIN);
-    sm_config_set_sideset_pins(&sm_conf, SIDESET_PIN);
+    sm_config_set_jmp_pin(&sm_conf, dataInPin);
+    sm_config_set_sideset_pins(&sm_conf, sidesetPin);
 
     sm_config_set_in_shift(&sm_conf, false, true, 24);  // shift left, auto push after 24 bit
     sm_config_set_out_shift(&sm_conf, false, false, 0); // shift left, no auto pull
@@ -136,7 +136,8 @@ private:
     dma_channel_start(dma_ctrl_chan);
   }
 
-  inline void runSM() {
+  inline void runSM(uint8_t dataInPin) 
+  {
     pio_sm_clear_fifos(pio1, sm_receiver);
     pio_sm_init(pio1, sm_receiver, offset_receiver, &sm_conf);
 
@@ -148,13 +149,13 @@ private:
     // wait for first reset pulse
     bool reset_finished = false;
     while (!reset_finished) {
-      while (gpio_get(DATA_IN_PIN))
+      while (gpio_get(dataInPin))
         ;
 
       const auto us = time_us_32();
       reset_finished = true;
       while (time_us_32() - us < 10) {
-        if (gpio_get(DATA_IN_PIN)) {
+        if (gpio_get(dataInPin)) {
           reset_finished = false;
           break;
         }
@@ -164,22 +165,24 @@ private:
     pio_sm_set_enabled(pio1, sm_receiver, true);
   }
 
-  inline void initGPIO_repeater() {
-    pio_sm_set_consecutive_pindirs(pio0, sm_repeater, DATA_IN_PIN, 1, GPIO_IN);
-    pio_gpio_init(pio0, DATA_IN_PIN);
+  inline void initGPIO_repeater(uint8_t dataInPin, uint8_t dataOutPin)
+  {
+    pio_sm_set_consecutive_pindirs(pio0, sm_repeater, dataInPin, 1, GPIO_IN);
+    pio_gpio_init(pio0, dataInPin);
 
-    pio_sm_set_consecutive_pindirs(pio0, sm_repeater, DATA_OUT_PIN, 1, GPIO_OUT);
-    pio_gpio_init(pio0, DATA_OUT_PIN);
+    pio_sm_set_consecutive_pindirs(pio0, sm_repeater, dataOutPin, 1, GPIO_OUT);
+    pio_gpio_init(pio0, dataOutPin);
   }
 
-  inline void initSMConfig_repeater() {
+  inline void initSMConfig_repeater(uint8_t dataInPin, uint8_t sidesetPin, uint8_t dataOutPin)
+  {
     sm_conf_repeater = ws2811Repeater_program_get_default_config(offset_repeater);
 
-    sm_config_set_in_pins(&sm_conf_repeater, DATA_IN_PIN);
-    sm_config_set_jmp_pin(&sm_conf_repeater, DATA_IN_PIN);
-    sm_config_set_out_pins(&sm_conf_repeater, DATA_OUT_PIN, 1);
-    sm_config_set_set_pins(&sm_conf_repeater, DATA_OUT_PIN, 1);
-    sm_config_set_sideset_pins(&sm_conf_repeater, SIDESET_PIN);
+    sm_config_set_in_pins(&sm_conf_repeater, dataInPin);
+    sm_config_set_jmp_pin(&sm_conf_repeater, dataInPin);
+    sm_config_set_out_pins(&sm_conf_repeater, dataOutPin, 1);
+    sm_config_set_set_pins(&sm_conf_repeater, dataOutPin, 1);
+    sm_config_set_sideset_pins(&sm_conf_repeater, sidesetPin);
 
     sm_config_set_in_shift(&sm_conf_repeater, false, false, 0);  // shift left, no auto push
     sm_config_set_out_shift(&sm_conf_repeater, false, true, 32); // shift left, no auto pull
@@ -226,7 +229,7 @@ public:
   {
   }
 
-  void init(uint8_t ledsToRead, uint8_t ledsToSkip, WS2811ColorMapping mapping, bool statusLEDActive)
+  void init(uint8_t dataInPin, uint8_t sidesetPin, uint8_t dataOutPin, uint8_t ledsToRead, uint8_t ledsToSkip, WS2811ColorMapping mapping, bool statusLEDActive)
   {
     if (this->ledsToSkip!=0 || this->ledsToRead!=0)
     {
@@ -255,12 +258,12 @@ public:
 
     offset_repeater = pio_add_program(pio0, &ws2811Repeater_program);
     pio0->instr_mem[offset_repeater + ws2811Repeater_offset_num_bits_emulate] = pio_encode_set(pio_y, statusLEDActive ? 24 : 0);
-    pio0->instr_mem[offset_repeater + ws2811Repeater_offset_wait_sideset_reset] = pio_encode_wait_gpio(1, SIDESET_PIN);
-    pio0->instr_mem[offset_repeater + ws2811Repeater_offset_wait_sideset_bit] = pio_encode_wait_gpio(1, SIDESET_PIN);
+    pio0->instr_mem[offset_repeater + ws2811Repeater_offset_wait_sideset_reset] = pio_encode_wait_gpio(1, sidesetPin);
+    pio0->instr_mem[offset_repeater + ws2811Repeater_offset_wait_sideset_bit] = pio_encode_wait_gpio(1, sidesetPin);
 
     sm_repeater = pio_claim_unused_sm(pio0, true);
-    initGPIO_repeater();
-    initSMConfig_repeater();
+    initGPIO_repeater(dataInPin, dataOutPin);
+    initSMConfig_repeater(dataInPin, sidesetPin, dataOutPin);
 
     // try to add second program to pio0
     if (!pio_can_add_program(pio0, &ws2812_program)) 
@@ -270,7 +273,7 @@ public:
 
     sm_sender = pio_claim_unused_sm(pio0, false);
     offset_sender = pio_add_program(pio0, &ws2812_program);
-    ws2812_program_init(pio0, sm_sender, offset_sender, DATA_OUT_PIN, 800000, 24);
+    ws2812_program_init(pio0, sm_sender, offset_sender, dataOutPin, 800000, 24);
 
     // set the first LED in the output LED bus to light red at startup
     setStatusLEDColor(10, 0, 0);
@@ -299,8 +302,8 @@ public:
     dma_gather_chan = dma_claim_unused_channel(true);
     dma_ctrl_chan = dma_claim_unused_channel(true);
 
-    init_receiverGPIO();
-    initSMConfig();
+    init_receiverGPIO(dataInPin, sidesetPin);
+    initSMConfig(dataInPin, sidesetPin, dataOutPin);
     initDMA();
 
     irq_set_exclusive_handler(PIO1_IRQ_0, ws2811Receiver_pio1_irq0_handler);
@@ -310,7 +313,7 @@ public:
      
     // Enable IRQ in the NVIC
     irq_set_enabled(PIO1_IRQ_0, true);
-    runSM();
+    runSM(dataInPin);
   }
 
   ~WS2811Processor() {
